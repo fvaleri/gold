@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Calcolatore Oro 18 kt</title>
+    <title>Calcolatore Oro</title>
     <style>
         /* --- Variabili personalizzabili --- */
         :root {
@@ -94,8 +94,22 @@
             outline: none;
         }
 
-        .field input:focus {
+        .field input:focus, .field select:focus {
             border-color: var(--accent);
+        }
+
+        .field select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1.5px solid var(--border);
+            border-radius: 6px;
+            font-size: 1rem;
+            font-family: var(--font);
+            background: var(--card-bg);
+            color: var(--text);
+            transition: border-color 0.2s;
+            outline: none;
+            cursor: pointer;
         }
 
         /* --- Pulsante aggiorna quotazione --- */
@@ -228,7 +242,7 @@
 </head>
 <body>
 
-    <h1>Calcolatore Oro 18 kt</h1>
+    <h1>Calcolatore Oro</h1>
 
     <!-- =======================================
          SEZIONE INPUT
@@ -240,10 +254,23 @@
         <div class="field">
             <label for="quot24">Quotazione 24 kt (EUR/g)</label>
             <div class="field-row">
-                <input type="text" id="quot24" inputmode="decimal" placeholder="es. 130,52">
+                <input type="text" id="quot24" inputmode="decimal" placeholder="es. 100,00">
                 <button class="btn-fetch" id="btnFetch" onclick="fetchQuotazione()">Aggiorna</button>
             </div>
             <div class="fetch-status" id="fetchStatus"></div>
+        </div>
+
+        <!-- Caratura -->
+        <div class="field">
+            <label for="carati">Caratura</label>
+            <select id="carati">
+                <option value="24">24 kt</option>
+                <option value="22">22 kt</option>
+                <option value="21">21 kt</option>
+                <option value="18" selected>18 kt</option>
+                <option value="14">14 kt</option>
+                <option value="9">9 kt</option>
+            </select>
         </div>
 
         <!-- Peso totale in grammi -->
@@ -255,7 +282,7 @@
         <!-- Offerta totale (totale pagato dal compro oro) -->
         <div class="field">
             <label for="incasso">Offerta totale (EUR)</label>
-            <input type="text" id="incasso" inputmode="decimal" placeholder="es. 8321,00">
+            <input type="text" id="incasso" inputmode="decimal" placeholder="es. 10000,00">
         </div>
     </div>
 
@@ -266,13 +293,13 @@
         <h2>Risultati</h2>
 
         <div class="result-row">
-            <span class="result-label">Valore 18 kt / g</span>
-            <span class="result-value" id="val18"></span>
+            <span class="result-label">Valore grammo</span>
+            <span class="result-value" id="valG"></span>
         </div>
 
         <div class="result-row highlight">
-            <span class="result-label">Offerta 18 kt / g</span>
-            <span class="result-value" id="offerta18g"></span>
+            <span class="result-label">Offerta grammo</span>
+            <span class="result-value" id="offertaG"></span>
         </div>
 
         <div class="result-row highlight">
@@ -319,8 +346,8 @@
                 senza passare per intermediari.
             </li>
             <li>
-                La cessione di oro <strong>18 kt</strong> da parte di privati
-                <strong>non e soggetta a tassazione</strong>.
+                La cessione di <strong>oro usato (es: gioelli)</strong> da parte di
+                privati <strong>non e soggetta a tassazione</strong>.
             </li>
             <li>
                 Documenti richiesti: carta d'identita, codice fiscale, IBAN.
@@ -329,7 +356,7 @@
     </div>
 
     <div class="footer">
-        Quotazione oro spot:
+        Quotazioni:
         <a href="https://www.swissquote.com" target="_blank" rel="noopener">Swissquote</a>
     </div>
 
@@ -342,11 +369,8 @@
        (modificare qui i parametri principali)
        ----------------------------------------- */
 
-    // Swissquote: quotazione spot XAU/EUR (via allOrigins per CORS)
+    // Swissquote: quotazione spot XAU/EUR (via Cloudfare worker per CORS)
     var API_URL = "https://gold-proxy.fedevaleri.workers.dev";
-
-    // Fattore conversione 24 kt -> 18 kt (18/24 = 0.75)
-    var FATTORE_18KT = 0.75;
 
     // Grammi in un'oncia troy
     var GRAMMI_PER_ONCIA = 31.1035;
@@ -359,13 +383,14 @@
        ----------------------------------------- */
 
     var elQuot24     = document.getElementById("quot24");
+    var elCarati     = document.getElementById("carati");
     var elTotG       = document.getElementById("totG");
     var elIncasso    = document.getElementById("incasso");
     var elStatus     = document.getElementById("fetchStatus");
     var elBtn        = document.getElementById("btnFetch");
     var elRisultati  = document.getElementById("risultati");
-    var elVal18      = document.getElementById("val18");
-    var elOfferta18g = document.getElementById("offerta18g");
+    var elValG       = document.getElementById("valG");
+    var elOffertaG   = document.getElementById("offertaG");
     var elCom        = document.getElementById("com");
     var elReale      = document.getElementById("reale");
     var elPerdita    = document.getElementById("perdita");
@@ -411,50 +436,51 @@
        che un input cambia.
 
        Formule:
-         val18     = quot24 * 0.75
-         offerta18 = incasso / totG
-         ratio     = offerta18 / val18
+         fattore   = carati / 24
+         valG      = quot24 * fattore
+         offertaG  = incasso / totG
+         ratio     = offertaG / valG
          comm%     = (1 - ratio) * 100
-         reale     = val18 * totG
+         reale     = valG * totG
          perdita   = reale - incasso
        ----------------------------------------- */
 
     function calcola() {
         var quot24  = parseIta(elQuot24.value);
+        var carati  = parseInt(elCarati.value);
         var totG    = parseIta(elTotG.value);
         var incasso = parseIta(elIncasso.value);
+        var fattore = carati / 24;
 
-        // Serve almeno la quotazione 24 kt per mostrare qualcosa
         if (!quot24 || quot24 <= 0) {
             return;
         }
 
-        // Valore teorico 18 kt per grammo
-        var val18 = quot24 * FATTORE_18KT;
-        elVal18.textContent = fmtNum(val18) + " EUR/g";
+        var valG = quot24 * fattore;
+        elValG.textContent = fmtNum(valG) + " EUR/g";
 
         if (!totG || totG <= 0) {
             elReale.textContent      = "\u2013";
-            elOfferta18g.textContent = "\u2013";
+            elOffertaG.textContent = "\u2013";
             elCom.textContent        = "\u2013";
             elPerdita.textContent    = "\u2013";
             return;
         }
 
-        var reale = val18 * totG;
+        var reale = valG * totG;
         elReale.textContent = fmtEuro(reale);
 
         if (!incasso || incasso <= 0) {
-            elOfferta18g.textContent = "\u2013";
+            elOffertaG.textContent = "\u2013";
             elCom.textContent        = "\u2013";
             elPerdita.textContent    = "\u2013";
             return;
         }
 
-        var offerta18 = incasso / totG;
-        elOfferta18g.textContent = fmtNum(offerta18) + " EUR/g";
+        var offertaG = incasso / totG;
+        elOffertaG.textContent = fmtNum(offertaG) + " EUR/g";
 
-        var rapporto = offerta18 / val18;
+        var rapporto = offertaG / valG;
         var commissione = (1 - rapporto) * 100;
         elCom.textContent = commissione.toFixed(0) + " %";
 
@@ -492,6 +518,7 @@
        ----------------------------------------- */
 
     elQuot24.addEventListener("input", calcola);
+    elCarati.addEventListener("change", calcola);
     elTotG.addEventListener("input", calcola);
     elIncasso.addEventListener("input", calcola);
 
